@@ -485,7 +485,7 @@ class ApneaCNN(nn.Module):
 
         self.conv_block = nn.Sequential(
             # Block 1: broad temporal patterns (breathing rhythm ~3-5 seconds)
-            nn.Conv1d(in_channels=14, out_channels=64, kernel_size=7, padding=3),
+            nn.Conv1d(in_channels=4, out_channels=64, kernel_size=7, padding=3),
             nn.BatchNorm1d(64),
             nn.ReLU(),
             # Block 2: intermediate features (onset/offset of events)
@@ -520,14 +520,13 @@ class ApneaCNN(nn.Module):
 # STEP 8 — PyTorch Dataset, DataLoader, and training loop
 # ─────────────────────────────────────────────────────────────────────────────
 
-
 class ApneaDataset(Dataset):
     """Wraps numpy windows + labels arrays into a PyTorch Dataset."""
 
     def __init__(self, windows: np.ndarray, labels: np.ndarray):
         # Convert to tensors once at init time (not per __getitem__ call)
-        self.X = torch.from_numpy(windows).float()  # (N, 3, 300)
-        self.y = torch.from_numpy(labels).float()  # (N,) — float for BCEWithLogitsLoss
+        self.X = torch.from_numpy(windows).float()   # (N, 3, 300)
+        self.y = torch.from_numpy(labels).float()    # (N,) — float for BCEWithLogitsLoss
 
     def __len__(self):
         return len(self.y)
@@ -547,8 +546,8 @@ def build_dataset(patient_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
     with a dimension-1 mismatch (UCDDB files vary between 14 and 16 channels).
     """
     all_windows: list[np.ndarray] = []
-    all_labels: list[np.ndarray] = []
-    expected_channels: int | None = None  # locked from first good patient
+    all_labels:  list[np.ndarray] = []
+    expected_channels: int | None = None   # locked from first good patient
 
     for pid in patient_ids:
         print(f"  Processing {pid} ...", end=" ", flush=True)
@@ -562,32 +561,38 @@ def build_dataset(patient_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
 
             # Skip patients whose EDF has a different channel layout
             if n_ch != expected_channels:
-                print(
-                    f"SKIPPED — channel mismatch ({n_ch} ch, expected {expected_channels} ch)"
-                )
+                print(f"SKIPPED — channel mismatch ({n_ch} ch, expected {expected_channels} ch)")
                 continue
 
+            n_apnea = int(labs.sum())
+            apnea_percentage = 100 * (n_apnea / len(labs))
+
+            # 2. Check condition (5.0 = 5%)
+            if apnea_percentage < 5.0:  
+                print(f"SKIPPED — near normal patient ({apnea_percentage:.1f}%)")
+                continue
+
+            # 3. Append ONLY if all checks pass
             all_windows.append(wins)
             all_labels.append(labs)
-            n_apnea = int(labs.sum())
-            print(
-                f"{len(labs)} windows, {n_apnea} apnea ({100 * n_apnea / len(labs):.1f}%)"
-            )
+
+            print(f"{len(labs)} windows, {n_apnea} apnea ({apnea_percentage:.1f}%)")
+
         except Exception as e:
             print(f"FAILED — {e}")
 
     windows = np.concatenate(all_windows, axis=0)
-    labels = np.concatenate(all_labels, axis=0)
+    labels  = np.concatenate(all_labels,  axis=0)
     return windows, labels
 
 
 def train(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    criterion: nn.Module,
-    device: torch.device,
-    epoch: int,
+    model:      nn.Module,
+    loader:     DataLoader,
+    optimizer:  torch.optim.Optimizer,
+    criterion:  nn.Module,
+    device:     torch.device,
+    epoch:      int,
 ) -> float:
     """One training epoch. Returns mean loss."""
     model.train()
@@ -599,7 +604,7 @@ def train(
 
         optimizer.zero_grad()
         logits = model(X_batch).squeeze(1)  # (B,1) → (B,)
-        loss = criterion(logits, y_batch)
+        loss   = criterion(logits, y_batch)
         loss.backward()
         optimizer.step()
 
@@ -608,7 +613,6 @@ def train(
     mean_loss = total_loss / len(loader.dataset)
     print(f"  Epoch {epoch:02d} | train loss: {mean_loss:.4f}")
     return mean_loss
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 9 — Evaluation: accuracy, macro F1, raw confusion matrix
