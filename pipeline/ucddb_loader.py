@@ -21,7 +21,13 @@ import pandas as pd
 import numpy as np
 import mne
 from scipy.signal import resample_poly
-from sklearn.metrics import f1_score, confusion_matrix, accuracy_score, recall_score, precision_score
+from sklearn.metrics import (
+    f1_score,
+    confusion_matrix,
+    accuracy_score,
+    recall_score,
+    precision_score,
+)
 
 import torch
 import torch.nn as nn
@@ -44,26 +50,27 @@ ALL_PATIENTS = [
 
 # Patient-level 80/20 split — all windows from a patient stay on one side
 TRAIN_PATIENTS = ALL_PATIENTS[:20]  # ucddb002 → ucddb023
-TEST_PATIENTS  = ALL_PATIENTS[20:]  # ucddb024 → ucddb028
+TEST_PATIENTS = ALL_PATIENTS[20:]  # ucddb024 → ucddb028
 
 # Signal constants
-TARGET_SFREQ     = 10.0   # Hz — all channels resampled to this
-WINDOW_SECONDS   = 30     # seconds per window
-SAMPLES_PER_WIN  = int(WINDOW_SECONDS * TARGET_SFREQ)  # 300 samples
+TARGET_SFREQ = 10.0  # Hz — all channels resampled to this
+WINDOW_SECONDS = 30  # seconds per window
+SAMPLES_PER_WIN = int(WINDOW_SECONDS * TARGET_SFREQ)  # 300 samples
 
 # Labeling rule: event must overlap window by at least this many seconds
 OVERLAP_THRESHOLD_SECS = 10
 
 # Training hyperparameters
-BATCH_SIZE  = 64
-NUM_EPOCHS  = 20
-LEARN_RATE  = 1e-3
-DROPOUT     = 0.3
+BATCH_SIZE = 64
+NUM_EPOCHS = 20
+LEARN_RATE = 1e-3
+DROPOUT = 0.3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 1 — Load EDF and extract all 3 channels as a raw numpy array
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def load_edf(patient_id: str) -> tuple[np.ndarray, float, list[str]]:
     """
@@ -82,7 +89,7 @@ def load_edf(patient_id: str) -> tuple[np.ndarray, float, list[str]]:
     raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=False)
 
     native_sfreq = raw.info["sfreq"]
-    ch_names     = raw.info["ch_names"]
+    ch_names = raw.info["ch_names"]
 
     # get_data() returns shape (n_channels, total_samples)
     data = raw.get_data()
@@ -93,6 +100,7 @@ def load_edf(patient_id: str) -> tuple[np.ndarray, float, list[str]]:
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 2 — Resample all channels from native sfreq → 10 Hz
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def resample_to_10hz(data: np.ndarray, native_sfreq: float) -> np.ndarray:
     """
@@ -112,7 +120,7 @@ def resample_to_10hz(data: np.ndarray, native_sfreq: float) -> np.ndarray:
     """
     # resample_poly needs integer up/down ratios
     # e.g. 128 Hz → 10 Hz: up=10, down=128 → gcd reduces to up=5, down=64
-    up   = int(TARGET_SFREQ)
+    up = int(TARGET_SFREQ)
     down = int(native_sfreq)
 
     # axis=1 means resample along the time axis (columns), not the channel axis
@@ -124,6 +132,7 @@ def resample_to_10hz(data: np.ndarray, native_sfreq: float) -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 3 — Parse respevt.txt into a DataFrame, then extract event tuples
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def parse_respevt(patient_id: str) -> list[tuple[float, float]]:
     """
@@ -171,15 +180,14 @@ def parse_respevt(patient_id: str) -> list[tuple[float, float]]:
 
     # Assign readable names to the columns we actually use
     # (remaining columns are SpO2, %Drop, snore, arousal, etc. — ignored)
-    df.columns = range(df.shape[1])   # ensure integer column indices
+    df.columns = range(df.shape[1])  # ensure integer column indices
     df = df.rename(columns={0: "time_str", 1: "event_type"})
 
     # --- Filter to apnea and hypopnea rows only ---------------------------
     # .str.contains is case-sensitive by default; na=False drops NaN rows
-    is_apnea_or_hyp = (
-        df["event_type"].str.contains("APNEA", na=False)
-        | df["event_type"].str.contains("HYP",   na=False)
-    )
+    is_apnea_or_hyp = df["event_type"].str.contains("APNEA", na=False) | df[
+        "event_type"
+    ].str.contains("HYP", na=False)
     df = df[is_apnea_or_hyp].copy()
 
     # --- Find the Duration column -----------------------------------------
@@ -192,7 +200,7 @@ def parse_respevt(patient_id: str) -> list[tuple[float, float]]:
     candidate_cols = [c for c in df.columns if isinstance(c, int) and c >= 2]
 
     for col in candidate_cols:
-        numeric = pd.to_numeric(df[col], errors="coerce")   # non-numeric → NaN
+        numeric = pd.to_numeric(df[col], errors="coerce")  # non-numeric → NaN
         # A whole number has zero fractional part after coercion
         is_whole = (numeric == numeric.round()) & numeric.notna()
         if is_whole.any():
@@ -227,8 +235,9 @@ def parse_respevt(patient_id: str) -> list[tuple[float, float]]:
 # STEP 4 — Create 30-second non-overlapping windows and assign binary labels
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def make_windows_and_labels(
-    data:   np.ndarray,
+    data: np.ndarray,
     events: list[tuple[float, float]],
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -266,8 +275,8 @@ def make_windows_and_labels(
 
     for i in range(n_windows):
         # Time boundaries of this window in seconds
-        w_start = i * WINDOW_SECONDS          # e.g. window 0 → 0s
-        w_end   = w_start + WINDOW_SECONDS    # e.g. window 0 → 30s
+        w_start = i * WINDOW_SECONDS  # e.g. window 0 → 0s
+        w_end = w_start + WINDOW_SECONDS  # e.g. window 0 → 30s
 
         for onset_sec, duration_sec in events:
             event_end = onset_sec + duration_sec
@@ -296,7 +305,7 @@ CLIP_SIGMA = 5.0
 
 def normalize(
     windows: np.ndarray,
-    labels:  np.ndarray,
+    labels: np.ndarray,
     verbose: bool = False,
 ) -> np.ndarray:
     """
@@ -321,7 +330,7 @@ def normalize(
     -------
     normalized : (n_windows, 3, 300) — float32, clipped to [-5, +5]
     """
-    normal_mask = (labels == 0)
+    normal_mask = labels == 0
     normal_wins = windows[normal_mask]  # only normal windows for stats
 
     normalized = windows.astype(np.float32).copy()
@@ -331,7 +340,7 @@ def normalize(
         ch_samples = normal_wins[:, ch, :].flatten()
 
         ch_mean = ch_samples.mean()
-        ch_std  = ch_samples.std()
+        ch_std = ch_samples.std()
 
         # Apply: (x - mean) / (std + epsilon)
         # epsilon = 1e-8 prevents division by zero on flat channels
@@ -340,8 +349,10 @@ def normalize(
         if verbose:
             raw_min = float(windows[:, ch, :].min())
             raw_max = float(windows[:, ch, :].max())
-            print(f"    Chan {ch}: raw=[{raw_min:.2f}, {raw_max:.2f}]  "
-                  f"mean={ch_mean:.4f}  std={ch_std:.4f}")
+            print(
+                f"    Chan {ch}: raw=[{raw_min:.2f}, {raw_max:.2f}]  "
+                f"mean={ch_mean:.4f}  std={ch_std:.4f}"
+            )
 
     # Clip z-scores to suppress artifact spikes.
     # Values beyond ±CLIP_SIGMA are real signal extremes (43 sigma = motion artifact),
@@ -355,15 +366,16 @@ def normalize(
 # STEP 6 — Diagnostic gate check: run pipeline for ONE patient, print stats
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def run_gate_check(patient_id: str = "ucddb002") -> None:
     """
     Run the full pipeline for one patient and print a diagnostic block.
     Read the output carefully before proceeding to model training.
     A model trained on broken data will still produce a plausible loss curve.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  GATE CHECK — Patient: {patient_id}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # --- Step 1: Load ---
     data, native_sfreq, ch_names = load_edf(patient_id)
@@ -379,16 +391,18 @@ def run_gate_check(patient_id: str = "ucddb002") -> None:
     events = parse_respevt(patient_id)
     print(f"  Events parsed : {len(events)}")
     if events:
-        print(f"  First event   : onset={events[0][0]:.0f}s, duration={events[0][1]:.0f}s")
+        print(
+            f"  First event   : onset={events[0][0]:.0f}s, duration={events[0][1]:.0f}s"
+        )
 
     # --- Step 4: Window + label ---
     windows, labels = make_windows_and_labels(data_10hz, events)
-    n_total  = len(labels)
-    n_apnea  = int(labels.sum())
+    n_total = len(labels)
+    n_apnea = int(labels.sum())
     n_normal = n_total - n_apnea
     print(f"  Total windows : {n_total}")
-    print(f"  Apnea windows : {n_apnea}  ({100*n_apnea/n_total:.1f}%)")
-    print(f"  Normal windows: {n_normal}  ({100*n_normal/n_total:.1f}%)")
+    print(f"  Apnea windows : {n_apnea}  ({100 * n_apnea / n_total:.1f}%)")
+    print(f"  Normal windows: {n_normal}  ({100 * n_normal / n_total:.1f}%)")
     print(f"  Window shape  : {windows.shape[1:]}")
     print(f"  Label dtype   : {labels.dtype}")
 
@@ -398,22 +412,35 @@ def run_gate_check(patient_id: str = "ucddb002") -> None:
     windows_norm = normalize(windows, labels, verbose=True)
     sig_min = float(windows_norm.min())
     sig_max = float(windows_norm.max())
-    print(f"  Signal range  : [{sig_min:.2f}, {sig_max:.2f}]  (after clip to ±{CLIP_SIGMA})")
+    print(
+        f"  Signal range  : [{sig_min:.2f}, {sig_max:.2f}]  (after clip to ±{CLIP_SIGMA})"
+    )
 
     # --- Checks ---
     print(f"\n  Checks:")
     apnea_rate = n_apnea / n_total
-    print(f"  {'✓' if 0.10 <= apnea_rate <= 0.40 else '✗'} Apnea rate in [10%, 40%]  → {100*apnea_rate:.1f}%")
-    print(f"  {'✓' if windows.shape[1:] == (3, 300) else '✗'} Window shape is (3, 300)  → {windows.shape[1:]}")
-    print(f"  {'✓' if -6 <= sig_min and sig_max <= 6 else '✗'} Signal range in [-6, +6]  → [{sig_min:.2f}, {sig_max:.2f}]")
-    print(f"  {'✓' if labels.dtype == np.int64 else '✗'} Labels are int64           → {labels.dtype}")
-    print(f"  {'✓' if len(events) > 0 else '✗'} Events parsed > 0          → {len(events)}")
-    print(f"{'='*60}\n")
+    print(
+        f"  {'✓' if 0.10 <= apnea_rate <= 0.40 else '✗'} Apnea rate in [10%, 40%]  → {100 * apnea_rate:.1f}%"
+    )
+    print(
+        f"  {'✓' if windows.shape[1:] == (3, 300) else '✗'} Window shape is (3, 300)  → {windows.shape[1:]}"
+    )
+    print(
+        f"  {'✓' if -6 <= sig_min and sig_max <= 6 else '✗'} Signal range in [-6, +6]  → [{sig_min:.2f}, {sig_max:.2f}]"
+    )
+    print(
+        f"  {'✓' if labels.dtype == np.int64 else '✗'} Labels are int64           → {labels.dtype}"
+    )
+    print(
+        f"  {'✓' if len(events) > 0 else '✗'} Events parsed > 0          → {len(events)}"
+    )
+    print(f"{'=' * 60}\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Full pipeline for a single patient → returns normalized windows + labels
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def process_patient(patient_id: str) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -425,16 +452,17 @@ def process_patient(patient_id: str) -> tuple[np.ndarray, np.ndarray]:
     labels  : (n_windows,), int64, binary
     """
     data, native_sfreq, _ = load_edf(patient_id)
-    data_10hz              = resample_to_10hz(data, native_sfreq)
-    events                 = parse_respevt(patient_id)
-    windows, labels        = make_windows_and_labels(data_10hz, events)
-    windows_norm           = normalize(windows, labels)
+    data_10hz = resample_to_10hz(data, native_sfreq)
+    events = parse_respevt(patient_id)
+    windows, labels = make_windows_and_labels(data_10hz, events)
+    windows_norm = normalize(windows, labels)
     return windows_norm, labels
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STEP 7 — 1D CNN Model Definition
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class ApneaCNN(nn.Module):
     """
@@ -460,12 +488,10 @@ class ApneaCNN(nn.Module):
             nn.Conv1d(in_channels=14, out_channels=64, kernel_size=7, padding=3),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-
             # Block 2: intermediate features (onset/offset of events)
             nn.Conv1d(in_channels=64, out_channels=128, kernel_size=5, padding=2),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-
             # Block 3: fine-grained abstract features
             nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
             nn.BatchNorm1d(256),
@@ -479,14 +505,14 @@ class ApneaCNN(nn.Module):
             nn.Dropout(DROPOUT),
             nn.Linear(256, 64),
             nn.ReLU(),
-            nn.Linear(64, 1),   # raw logit — sigmoid applied in loss and at inference
+            nn.Linear(64, 1),  # raw logit — sigmoid applied in loss and at inference
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, 14, 300)
-        x = self.conv_block(x)         # → (B, 256, 300)
-        x = self.gap(x).squeeze(-1)    # → (B, 256)
-        x = self.classifier(x)         # → (B, 1)
+        x = self.conv_block(x)  # → (B, 256, 300)
+        x = self.gap(x).squeeze(-1)  # → (B, 256)
+        x = self.classifier(x)  # → (B, 1)
         return x
 
 
@@ -494,13 +520,14 @@ class ApneaCNN(nn.Module):
 # STEP 8 — PyTorch Dataset, DataLoader, and training loop
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class ApneaDataset(Dataset):
     """Wraps numpy windows + labels arrays into a PyTorch Dataset."""
 
     def __init__(self, windows: np.ndarray, labels: np.ndarray):
         # Convert to tensors once at init time (not per __getitem__ call)
-        self.X = torch.from_numpy(windows).float()   # (N, 3, 300)
-        self.y = torch.from_numpy(labels).float()    # (N,) — float for BCEWithLogitsLoss
+        self.X = torch.from_numpy(windows).float()  # (N, 3, 300)
+        self.y = torch.from_numpy(labels).float()  # (N,) — float for BCEWithLogitsLoss
 
     def __len__(self):
         return len(self.y)
@@ -520,8 +547,8 @@ def build_dataset(patient_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
     with a dimension-1 mismatch (UCDDB files vary between 14 and 16 channels).
     """
     all_windows: list[np.ndarray] = []
-    all_labels:  list[np.ndarray] = []
-    expected_channels: int | None = None   # locked from first good patient
+    all_labels: list[np.ndarray] = []
+    expected_channels: int | None = None  # locked from first good patient
 
     for pid in patient_ids:
         print(f"  Processing {pid} ...", end=" ", flush=True)
@@ -535,28 +562,32 @@ def build_dataset(patient_ids: list[str]) -> tuple[np.ndarray, np.ndarray]:
 
             # Skip patients whose EDF has a different channel layout
             if n_ch != expected_channels:
-                print(f"SKIPPED — channel mismatch ({n_ch} ch, expected {expected_channels} ch)")
+                print(
+                    f"SKIPPED — channel mismatch ({n_ch} ch, expected {expected_channels} ch)"
+                )
                 continue
 
             all_windows.append(wins)
             all_labels.append(labs)
             n_apnea = int(labs.sum())
-            print(f"{len(labs)} windows, {n_apnea} apnea ({100*n_apnea/len(labs):.1f}%)")
+            print(
+                f"{len(labs)} windows, {n_apnea} apnea ({100 * n_apnea / len(labs):.1f}%)"
+            )
         except Exception as e:
             print(f"FAILED — {e}")
 
     windows = np.concatenate(all_windows, axis=0)
-    labels  = np.concatenate(all_labels,  axis=0)
+    labels = np.concatenate(all_labels, axis=0)
     return windows, labels
 
 
 def train(
-    model:      nn.Module,
-    loader:     DataLoader,
-    optimizer:  torch.optim.Optimizer,
-    criterion:  nn.Module,
-    device:     torch.device,
-    epoch:      int,
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    criterion: nn.Module,
+    device: torch.device,
+    epoch: int,
 ) -> float:
     """One training epoch. Returns mean loss."""
     model.train()
@@ -568,7 +599,7 @@ def train(
 
         optimizer.zero_grad()
         logits = model(X_batch).squeeze(1)  # (B,1) → (B,)
-        loss   = criterion(logits, y_batch)
+        loss = criterion(logits, y_batch)
         loss.backward()
         optimizer.step()
 
@@ -583,8 +614,9 @@ def train(
 # STEP 9 — Evaluation: accuracy, macro F1, raw confusion matrix
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def evaluate(
-    model:  nn.Module,
+    model: nn.Module,
     loader: DataLoader,
     device: torch.device,
 ) -> None:
@@ -597,45 +629,47 @@ def evaluate(
     Threshold: sigmoid(logit) >= 0.5 → predicted apnea (label=1)
     """
     model.eval()
-    all_preds  = []
+    all_preds = []
     all_labels = []
 
     with torch.no_grad():
         for X_batch, y_batch in loader:
             X_batch = X_batch.to(device)
-            logits  = model(X_batch).squeeze(1)
-            probs   = torch.sigmoid(logits)
-            preds   = (probs >= 0.5).long().cpu().numpy()
+            logits = model(X_batch).squeeze(1)
+            probs = torch.sigmoid(logits)
+            preds = (probs >= 0.5).long().cpu().numpy()
             all_preds.extend(preds)
             all_labels.extend(y_batch.long().numpy())
 
     y_true = np.array(all_labels)
     y_pred = np.array(all_preds)
 
-    acc     = accuracy_score(y_true, y_pred)
+    acc = accuracy_score(y_true, y_pred)
     macro_f1 = f1_score(y_true, y_pred, average="macro", zero_division=0)
-    cm      = confusion_matrix(y_true, y_pred)
+    cm = confusion_matrix(y_true, y_pred)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  EVALUATION RESULTS")
-    print(f"{'='*60}")
-    print(f"  Accuracy  : {acc:.4f}  ({100*acc:.1f}%)")
-    print(f"  Macro F1  : {macro_f1:.4f}  {'✓ PASS (>0.5)' if macro_f1 > 0.5 else '✗ FAIL — check data pipeline'}")
+    print(f"{'=' * 60}")
+    print(f"  Accuracy  : {acc:.4f}  ({100 * acc:.1f}%)")
+    print(
+        f"  Macro F1  : {macro_f1:.4f}  {'✓ PASS (>0.5)' if macro_f1 > 0.5 else '✗ FAIL — check data pipeline'}"
+    )
     print(f"\n  Confusion Matrix (raw counts):")
     print(f"                     Predicted Normal  Predicted Apnea")
     if cm.shape == (2, 2):
         tn, fp, fn, tp = cm.ravel()
         print(f"  Actually Normal  |     TN = {tn:<8d}  |  FP = {fp:<8d}|")
         print(f"  Actually Apnea   |     FN = {fn:<8d}  |  TP = {tp:<8d}|")
-        print(f"\n  Apnea recall (sensitivity): {tp/(tp+fn+1e-8):.3f}")
-        print(f"  Apnea precision           : {tp/(tp+fp+1e-8):.3f}")
+        print(f"\n  Apnea recall (sensitivity): {tp / (tp + fn + 1e-8):.3f}")
+        print(f"  Apnea precision           : {tp / (tp + fp + 1e-8):.3f}")
     else:
         print(cm)
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def evaluate_threshold_sweep(
-    model:  nn.Module,
+    model: nn.Module,
     loader: DataLoader,
     device: torch.device,
 ) -> None:
@@ -648,25 +682,25 @@ def evaluate_threshold_sweep(
     with torch.no_grad():
         for X, y in loader:
             logits = model(X.to(device)).squeeze()
-            probs  = torch.sigmoid(logits).cpu().numpy()
+            probs = torch.sigmoid(logits).cpu().numpy()
             all_probs.extend(probs)
             all_labels.extend(y.numpy())
 
-    all_probs  = np.array(all_probs)
+    all_probs = np.array(all_probs)
     all_labels = np.array(all_labels)
 
     # Sweep thresholds
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  THRESHOLD SWEEP EVALUATION")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     thresholds = np.arange(0.1, 0.9, 0.05)
     for t in thresholds:
         preds = (all_probs >= t).astype(int)
-        f1   = f1_score(all_labels, preds, average="macro", zero_division=0)
+        f1 = f1_score(all_labels, preds, average="macro", zero_division=0)
         sens = recall_score(all_labels, preds, pos_label=1, zero_division=0)
         prec = precision_score(all_labels, preds, pos_label=1, zero_division=0)
         print(f"t={t:.2f}  macro_F1={f1:.3f}  sens={sens:.3f}  prec={prec:.3f}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -674,7 +708,6 @@ def evaluate_threshold_sweep(
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-
     # ── STEP 6: Gate check ──────────────────────────────────────────────────
     # Run this first. Do not skip. Read the output carefully.
     print("\n[STEP 6] Running diagnostic gate check on ucddb002 ...")
@@ -685,10 +718,14 @@ if __name__ == "__main__":
     X_train, y_train = build_dataset(TRAIN_PATIENTS)
 
     print("\n[STEP 8] Building TEST dataset ...")
-    X_test,  y_test  = build_dataset(TEST_PATIENTS)
+    X_test, y_test = build_dataset(TEST_PATIENTS)
 
-    print(f"\n  Train: {len(y_train)} windows  ({int(y_train.sum())} apnea, {int((y_train==0).sum())} normal)")
-    print(f"  Test : {len(y_test)}  windows  ({int(y_test.sum())}  apnea, {int((y_test==0).sum())}  normal)")
+    print(
+        f"\n  Train: {len(y_train)} windows  ({int(y_train.sum())} apnea, {int((y_train == 0).sum())} normal)"
+    )
+    print(
+        f"  Test : {len(y_test)}  windows  ({int(y_test.sum())}  apnea, {int((y_test == 0).sum())}  normal)"
+    )
 
     # ── Compute class weight for imbalanced labels ──────────────────────────
     # Weight apnea windows more heavily so the model is penalized for missing them.
@@ -697,18 +734,24 @@ if __name__ == "__main__":
     # floods the output with false positives. Cap at MAX_POS_WEIGHT.
     MAX_POS_WEIGHT = 5.0
     n_normal_train = int((y_train == 0).sum())
-    n_apnea_train  = int(y_train.sum())
-    raw_weight     = n_normal_train / (n_apnea_train + 1e-8)
-    weight_apnea   = min(raw_weight, MAX_POS_WEIGHT)
+    n_apnea_train = int(y_train.sum())
+    raw_weight = n_normal_train / (n_apnea_train + 1e-8)
+    weight_apnea = min(raw_weight, MAX_POS_WEIGHT)
     print(f"\n  Raw class ratio       : {raw_weight:.2f}x")
-    print(f"  Class weight applied  : {weight_apnea:.2f}x  (capped at {MAX_POS_WEIGHT}x)")
+    print(
+        f"  Class weight applied  : {weight_apnea:.2f}x  (capped at {MAX_POS_WEIGHT}x)"
+    )
 
     # ── DataLoaders ─────────────────────────────────────────────────────────
     train_dataset = ApneaDataset(X_train, y_train)
-    test_dataset  = ApneaDataset(X_test,  y_test)
+    test_dataset = ApneaDataset(X_test, y_test)
 
-    train_loader  = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,  num_workers=0)
-    test_loader   = DataLoader(test_dataset,  batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+    train_loader = DataLoader(
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0
+    )
 
     # ── STEP 7: Instantiate model ────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
